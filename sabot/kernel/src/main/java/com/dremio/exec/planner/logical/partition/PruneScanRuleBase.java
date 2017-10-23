@@ -61,9 +61,11 @@ import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexUtil;
 import org.apache.calcite.util.BitSets;
-import com.clearspring.analytics.util.Preconditions;
+
+import com.dremio.common.expression.CompleteType;
 import com.dremio.common.expression.LogicalExpression;
 import com.dremio.common.expression.SchemaPath;
+import com.dremio.common.types.TypeProtos.DataMode;
 import com.dremio.common.types.TypeProtos.MajorType;
 import com.dremio.common.types.Types;
 import com.dremio.datastore.SearchQueryUtils;
@@ -94,6 +96,7 @@ import com.dremio.service.namespace.StoragePluginType;
 import com.dremio.service.namespace.dataset.proto.DatasetSplit;
 import com.dremio.service.namespace.dataset.proto.PartitionValue;
 import com.google.common.base.Function;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.ArrayListMultimap;
@@ -273,7 +276,13 @@ public abstract class PruneScanRuleBase<T extends ScanRelBase & PruneableScan> e
 
         for (int partitionColumnIndex : BitSets.toIter(partitionColumnBitSet)) {
           final SchemaPath column = SchemaPath.getSimplePath(fieldNameMap.get(partitionColumnIndex));
-          final MajorType type = Types.optional(scanRel.getBatchSchema().getFieldId(column).getFinalType().toMinorType());
+          final CompleteType completeType = scanRel.getBatchSchema().getFieldId(column).getFinalType();
+          final MajorType type;
+          if (completeType.getPrecision() != null && completeType.getScale() != null) {
+            type = Types.withScaleAndPrecision(completeType.toMinorType(), DataMode.OPTIONAL, completeType.getScale(), completeType.getPrecision());
+          } else {
+            type = Types.optional(completeType.toMinorType());
+          }
           final ValueVector v = TypeHelper.getNewVector(getFieldForNameAndMajorType(column.getAsUnescapedPath(), type), allocator);
           v.allocateNew();
           vectors[partitionColumnIndex] = v;

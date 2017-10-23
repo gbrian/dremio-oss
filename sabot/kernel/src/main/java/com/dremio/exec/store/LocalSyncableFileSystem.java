@@ -120,12 +120,15 @@ public class LocalSyncableFileSystem extends FileSystem {
   @Override
   public FileStatus getFileStatus(Path path) throws IOException {
     File file = new File(Path.getPathWithoutSchemeAndAuthority(path).toString());
-    return new FileStatus(file.length(), file.isDirectory(), 1, 0, file.lastModified(), path);
+    if (file.exists()) {
+      return new FileStatus(file.length(), file.isDirectory(), 1, 0, file.lastModified(), path);
+    }
+    return null;
   }
 
   public class LocalSyncableOutputStream extends OutputStream implements Syncable {
-    private FileOutputStream fos;
-    private BufferedOutputStream output;
+    private final FileOutputStream fos;
+    private final BufferedOutputStream output;
 
     public LocalSyncableOutputStream(Path path) throws FileNotFoundException {
       File dir = new File(path.getParent().toString());
@@ -160,6 +163,15 @@ public class LocalSyncableFileSystem extends FileSystem {
     @Override
     public void write(int b) throws IOException {
       output.write(b);
+    }
+
+    @Override
+    public void close() throws IOException {
+      try {
+        output.close(); // closes "fos"
+      } finally {
+        super.close();
+      }
     }
   }
 
@@ -244,6 +256,15 @@ public class LocalSyncableFileSystem extends FileSystem {
       input.read(b);
       position++;
       return b[0] & 0xFF;
+    }
+
+    @Override
+    public void close() throws IOException {
+      try {
+        input.close();
+      } finally {
+        super.close();
+      }
     }
   }
 }

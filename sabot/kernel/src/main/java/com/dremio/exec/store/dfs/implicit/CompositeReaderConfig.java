@@ -44,17 +44,24 @@ import com.dremio.exec.store.dfs.implicit.ConstantColumnPopulators.VarBinaryName
 import com.dremio.exec.store.dfs.implicit.ConstantColumnPopulators.VarCharNameValuePair;
 import com.dremio.service.namespace.dataset.proto.DatasetSplit;
 import com.dremio.service.namespace.dataset.proto.PartitionValue;
+import com.google.common.base.Function;
+import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 
 public class CompositeReaderConfig {
 
   private final ImmutableList<SchemaPath> innerColumns;
-  private final List<FieldValuePair> partitionFields;
+  private final ImmutableMap<String, FieldValuePair> partitionFieldMap;
 
   private CompositeReaderConfig(List<SchemaPath> innerColumns, List<FieldValuePair> partitionFields) {
     super();
     this.innerColumns = ImmutableList.copyOf(innerColumns);
-    this.partitionFields = partitionFields;
+    this.partitionFieldMap = FluentIterable.from(partitionFields).uniqueIndex(new Function<FieldValuePair, String>(){
+      @Override
+      public String apply(FieldValuePair input) {
+        return input.field.getName();
+      }});
   }
 
   public List<SchemaPath> getInnerColumns(){
@@ -66,17 +73,22 @@ public class CompositeReaderConfig {
   }
 
   public boolean hasPartitionColumns(){
-    return !partitionFields.isEmpty();
+    return !partitionFieldMap.isEmpty();
   }
 
   public RecordReader wrapIfNecessary(BufferAllocator allocator, RecordReader innerReader, DatasetSplit split){
-    if(partitionFields.isEmpty()){
+    if(partitionFieldMap.isEmpty()){
       return innerReader;
     } else {
-      Populator[] populators = new Populator[partitionFields.size()];
+      Populator[] populators = new Populator[partitionFieldMap.size()];
       List<PartitionValue> values = split.getPartitionValuesList();
-      for(int i =0; i < partitionFields.size(); i++){
-        populators[i] = partitionFields.get(i).toPopulator(allocator, values);
+      int i = 0;
+      for(PartitionValue v : values) {
+        FieldValuePair p = partitionFieldMap.get(v.getColumn());
+        if(p != null) {
+          populators[i] = p.toPopulator(allocator, v);
+          i++;
+        }
       }
       return new AdditionalColumnsRecordReader(innerReader, populators);
     }
@@ -84,16 +96,14 @@ public class CompositeReaderConfig {
 
   private static class FieldValuePair {
     private final Field field;
-    private final int index;
 
-    public FieldValuePair(Field field, int index) {
+    public FieldValuePair(Field field) {
       super();
       this.field = field;
-      this.index = index;
     }
 
-    public Populator toPopulator(BufferAllocator allocator, List<PartitionValue> values){
-      return getPopulator(allocator, field, values.get(index));
+    public Populator toPopulator(BufferAllocator allocator, PartitionValue value){
+      return getPopulator(allocator, field, value);
     }
   }
 
@@ -131,7 +141,7 @@ public class CompositeReaderConfig {
     for(Field f : schema){
       Integer i = partitionNamesToValues.get(f.getName());
       if(i != null){
-        pairs.add(new FieldValuePair(f, i));
+        pairs.add(new FieldValuePair(f));
       }
     }
 
@@ -159,9 +169,9 @@ public class CompositeReaderConfig {
     case TIMESTAMP:
       return new TimeStampMilliNameValuePair(field.getName(), partitionValue.getLongValue()).createPopulator();
     case DECIMAL:
-      return new TwosComplementValuePair(allocator, field, partitionValue.getBinaryValue().toByteArray()).createPopulator();
+      return new TwosComplementValuePair(allocator, field, getByteArray(partitionValue)).createPopulator();
     case VARBINARY:
-      return new VarBinaryNameValuePair(field.getName(), partitionValue.getBinaryValue().toByteArray()).createPopulator();
+      return new VarBinaryNameValuePair(field.getName(), getByteArray(partitionValue)).createPopulator();
     case VARCHAR:
       return new VarCharNameValuePair(field.getName(), partitionValue.getStringValue()).createPopulator();
     default:
@@ -170,5 +180,11 @@ public class CompositeReaderConfig {
     }
   }
 
+  private static byte[] getByteArray(PartitionValue partitionValue) {
+    if (partitionValue.getBinaryValue() == null) {
+      return null;
+    }
 
+    return partitionValue.getBinaryValue().toByteArray();
+  }
 }

@@ -15,6 +15,8 @@
  */
 package com.dremio.exec.planner.logical;
 
+import static com.dremio.exec.expr.fn.impl.ConcatFunctions.CONCAT_MAX_ARGS;
+
 import java.math.BigDecimal;
 import java.util.GregorianCalendar;
 import java.util.HashMap;
@@ -449,20 +451,6 @@ public class RexToExpr {
         trimArgs.add(args.get(1));
 
         return FunctionCallFactory.createExpression(trimFunc, trimArgs);
-      } else if (functionName.equals("date_part")) {
-        // Rewrite DATE_PART functions as extract functions
-        // assert that the function has exactly two arguments
-        assert argsSize == 2;
-
-        /* Based on the first input to the date_part function we rewrite the function as the
-         * appropriate extract function. For example
-         * date_part('year', date '2008-2-23') ------> extractYear(date '2008-2-23')
-         */
-        assert args.get(0) instanceof QuotedString;
-
-        QuotedString extractString = (QuotedString) args.get(0);
-        String functionPostfix = extractString.value.substring(0, 1).toUpperCase() + extractString.value.substring(1).toLowerCase();
-        return FunctionCallFactory.createExpression("extract" + functionPostfix, args.subList(1, 2));
       } else if (functionName.equals("concat")) {
 
         if (argsSize == 1) {
@@ -476,21 +464,20 @@ public class RexToExpr {
 
           return FunctionCallFactory.createExpression(functionName, concatArgs);
 
-        } else if (argsSize > 2) {
+        } else if (argsSize > CONCAT_MAX_ARGS) {
           List<LogicalExpression> concatArgs = Lists.newArrayList();
 
-          /* stack concat functions on top of each other if we have more than two arguments
-           * Eg: concat(col1, col2, col3) => concat(concat(col1, col2), col3)
+          /* stack concat functions on top of each other if we have more than 10 arguments
+           * Eg: concat(c1, c2, c3, ..., c10, c11, c12) => concat(concat(c1, c2, ..., c10), c11, c12)
            */
-          concatArgs.add(args.get(0));
-          concatArgs.add(args.get(1));
+          concatArgs.addAll(args.subList(0, CONCAT_MAX_ARGS));
 
           LogicalExpression first = FunctionCallFactory.createExpression(functionName, concatArgs);
 
-          for (int i = 2; i < argsSize; i++) {
+          for (int i = CONCAT_MAX_ARGS; i < argsSize; i = i + (CONCAT_MAX_ARGS -1)) {
             concatArgs = Lists.newArrayList();
             concatArgs.add(first);
-            concatArgs.add(args.get(i));
+            concatArgs.addAll(args.subList(i, Math.min(argsSize, i + (CONCAT_MAX_ARGS - 1))));
             first = FunctionCallFactory.createExpression(functionName, concatArgs);
           }
 
@@ -525,7 +512,7 @@ public class RexToExpr {
       assert args.get(0) instanceof ValueExpressions.QuotedString;
 
       // Get the unit of time to be extracted
-      String timeUnitStr = ((ValueExpressions.QuotedString)args.get(0)).value;
+      String timeUnitStr = ((ValueExpressions.QuotedString)args.get(0)).value.toUpperCase();
 
       switch (timeUnitStr){
         case ("YEAR"):
